@@ -1,80 +1,89 @@
-// In-memory scalable database state
+import { pushLog, systemLogs } from '../services/loggerService.js';
+import { evaluateMarketSafety } from '../services/circuitBreaker.js';
+
 export const marketInventory = [
-  { id: "item-1", name: "iPhone 15 Pro Max (256GB)", stock: 14, basePrice: 72000, currentPrice: 72000, history: [72000], demandScore: 50 },
-  { id: "item-2", name: "PlayStation 5 Pro Digital", stock: 8, basePrice: 42000, currentPrice: 42000, history: [42000], demandScore: 30 },
-  { id: "item-3", name: "RTX 5080 Graphics Card", stock: 3, basePrice: 85000, currentPrice: 85000, history: [85000], demandScore: 85 }
+  { id: "item-1", name: "iPhone 15 Pro Max (256GB)", stock: 14, basePrice: 72000, currentPrice: 72000, history: [72000], demandScore: 50, isFrozen: false },
+  { id: "item-2", name: "PlayStation 5 Pro Digital", stock: 8, basePrice: 42000, currentPrice: 42000, history: [42000], demandScore: 30, isFrozen: false },
+  { id: "item-3", name: "RTX 5080 Graphics Card", stock: 3, basePrice: 85000, currentPrice: 85000, history: [85000], demandScore: 85, isFrozen: false }
 ];
-
-// High-frequency logging stack
-export const systemLogs = [];
-
-function pushLog(message, type = "info") {
-  const timestamp = new Date().toLocaleTimeString();
-  systemLogs.unshift({ id: Math.random().toString(36).substr(2, 9), timestamp, message, type });
-  if (systemLogs.length > 15) systemLogs.pop();
-}
-
-// Initial log seed
-pushLog("Real-Time Asset Engine safely initialized.", "system");
 
 export function runMarketSimulation(io) {
   setInterval(() => {
     marketInventory.forEach(item => {
+      if (item.isFrozen) return; // Disregard pricing shifts on frozen items
+
       const actionChance = Math.random();
-      
       if (actionChance > 0.75) { 
-        // Demand spikes
-        item.demandScore = Math.min(100, item.demandScore + Math.floor(Math.random() * 12));
+        item.demandScore = Math.min(100, item.demandScore + Math.floor(Math.random() * 15));
         const oldPrice = item.currentPrice;
-        item.currentPrice = Math.round(item.currentPrice * (1 + (item.demandScore / 3000)));
+        item.currentPrice = Math.round(item.currentPrice * (1 + (item.demandScore / 2000)));
         
         if (item.currentPrice !== oldPrice) {
-          pushLog(`Algorithmic surge triggered for ${item.name} (+₱${(item.currentPrice - oldPrice).toLocaleString()})`, "surge");
+          pushLog(`Algorithmic surge for ${item.name} (+₱${(item.currentPrice - oldPrice).toLocaleString()})`, "surge");
+        }
+        
+        // Evaluate stability thresholds
+        if (evaluateMarketSafety(item)) {
+          io.emit("SYSTEM_ALERT", { message: `MARKET PROTECTION: Trading frozen for ${item.name}!`, type: "critical" });
         }
       } else if (actionChance < 0.20) {
-        // Demand decays
         item.demandScore = Math.max(10, item.demandScore - Math.floor(Math.random() * 6));
-        item.currentPrice = Math.round(item.currentPrice * 0.996);
+        item.currentPrice = Math.round(item.currentPrice * 0.995);
       }
 
       item.history.push(item.currentPrice);
       if (item.history.length > 10) item.history.shift();
     });
 
-    // Unified payload broadcasting
-    io.emit("MARKET_DATA_STREAM", { inventory: marketInventory, logs: systemLogs });
+    broadcastState(io);
   }, 3000);
 }
 
 export function processPurchase(itemId, io) {
   const item = marketInventory.find(i => i.id === itemId);
-  if (!item || item.stock <= 0) {
-    pushLog(`Transaction blocked: Conflict detected. Resource exhausted.`, "error");
-    return { success: false, reason: "Out of Stock" };
+  if (!item || item.stock <= 0 || item.isFrozen) {
+    pushLog(`Transaction rejected: Order path blocked or item locked.`, "error");
+    return { success: false };
   }
   
   item.stock -= 1;
-  item.demandScore = Math.min(100, item.demandScore + 20);
-  item.currentPrice = Math.round(item.currentPrice * 1.035);
+  item.demandScore = Math.min(100, item.demandScore + 25);
+  item.currentPrice = Math.round(item.currentPrice * 1.04);
   item.history.push(item.currentPrice);
   
-  pushLog(`Order fulfilled: 1 unit of ${item.name} claimed.`, "success");
+  pushLog(`Fulfilled: 1 unit of ${item.name} captured.`, "success");
   
   if (item.stock === 0) {
-    pushLog(`CRITICAL: Stock depletion event on ${item.name}!`, "critical");
-    io.emit("SYSTEM_ALERT", { message: `CRITICAL ALERT: ${item.name} has officially sold out!`, type: "critical" });
+    pushLog(`Inventory Exhaustion: ${item.name} sold out.`, "critical");
+    io.emit("SYSTEM_ALERT", { message: `CRITICAL OUT-OF-STOCK: ${item.name} is completely empty!`, type: "critical" });
   }
 
-  return { success: true, updatedItem: item };
+  evaluateMarketSafety(item);
+  return { success: true };
+}
+
+export function toggleBreakerOverride(itemId, io) {
+  const item = marketInventory.find(i => i.id === itemId);
+  if (item) {
+    item.isFrozen = !item.isFrozen;
+    item.currentPrice = item.basePrice; // Reset price back to standard safety limits
+    item.history = [item.basePrice];
+    pushLog(`Manual Override: Admin forced state change on ${item.name}.`, "system");
+    broadcastState(io);
+  }
 }
 
 export function injectRestock(io) {
   marketInventory.forEach(item => {
     if (item.stock < 5) {
-      const injectionCount = Math.floor(Math.random() * 8) + 5;
-      item.stock += injectionCount;
-      pushLog(`Admin Refill event: Injected +${injectionCount} units into ${item.name}.`, "system");
+      const added = Math.floor(Math.random() * 5) + 5;
+      item.stock += added;
+      pushLog(`Supply Injection: Stock reset +${added} items for ${item.name}.`, "system");
     }
   });
+  broadcastState(io);
+}
+
+export function broadcastState(io) {
   io.emit("MARKET_DATA_STREAM", { inventory: marketInventory, logs: systemLogs });
 }
