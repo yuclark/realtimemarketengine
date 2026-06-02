@@ -5,52 +5,76 @@ export const marketInventory = [
   { id: "item-3", name: "RTX 5080 Graphics Card", stock: 3, basePrice: 85000, currentPrice: 85000, history: [85000], demandScore: 85 }
 ];
 
-/**
- * Programmatic Pricing Logic
- * Simulates high-frequency market adjustments based on mock user traffic
- */
+// High-frequency logging stack
+export const systemLogs = [];
+
+function pushLog(message, type = "info") {
+  const timestamp = new Date().toLocaleTimeString();
+  systemLogs.unshift({ id: Math.random().toString(36).substr(2, 9), timestamp, message, type });
+  if (systemLogs.length > 15) systemLogs.pop();
+}
+
+// Initial log seed
+pushLog("Real-Time Asset Engine safely initialized.", "system");
+
 export function runMarketSimulation(io) {
   setInterval(() => {
     marketInventory.forEach(item => {
-      // 1. Simulate random user traffic events (Add to cart, views, checkouts)
       const actionChance = Math.random();
       
-      if (actionChance > 0.7) { 
-        // High Demand Event: Price creeps up
-        item.demandScore = Math.min(100, item.demandScore + Math.floor(Math.random() * 15));
-        item.currentPrice = Math.round(item.currentPrice * (1 + (item.demandScore / 2500)));
-      } else if (actionChance < 0.25) {
-        // Low Demand Decay: Price drops slowly
-        item.demandScore = Math.max(10, item.demandScore - Math.floor(Math.random() * 8));
-        item.currentPrice = Math.round(item.currentPrice * (1 - 0.005));
+      if (actionChance > 0.75) { 
+        // Demand spikes
+        item.demandScore = Math.min(100, item.demandScore + Math.floor(Math.random() * 12));
+        const oldPrice = item.currentPrice;
+        item.currentPrice = Math.round(item.currentPrice * (1 + (item.demandScore / 3000)));
+        
+        if (item.currentPrice !== oldPrice) {
+          pushLog(`Algorithmic surge triggered for ${item.name} (+₱${(item.currentPrice - oldPrice).toLocaleString()})`, "surge");
+        }
+      } else if (actionChance < 0.20) {
+        // Demand decays
+        item.demandScore = Math.max(10, item.demandScore - Math.floor(Math.random() * 6));
+        item.currentPrice = Math.round(item.currentPrice * 0.996);
       }
 
-      // Hard limits to prevent negative numbers or broken schemas
-      if (item.currentPrice < item.basePrice * 0.75) item.currentPrice = Math.round(item.basePrice * 0.75);
-      if (item.currentPrice > item.basePrice * 2.0) item.currentPrice = Math.round(item.basePrice * 2.0);
-
-      // Keep tracking the last 10 ticks for the frontend graphs
       item.history.push(item.currentPrice);
       if (item.history.length > 10) item.history.shift();
     });
 
-    // 2. Broadcast the fresh event payload payload globally over WebSockets
-    io.emit("MARKET_UPDATE", marketInventory);
-  }, 3000); // Ticks every 3 seconds
+    // Unified payload broadcasting
+    io.emit("MARKET_DATA_STREAM", { inventory: marketInventory, logs: systemLogs });
+  }, 3000);
 }
 
-/**
- * Handles transactional checkouts to safely manage concurrency
- */
-export function processPurchase(itemId) {
+export function processPurchase(itemId, io) {
   const item = marketInventory.find(i => i.id === itemId);
-  if (!item || item.stock <= 0) return { success: false, reason: "Out of Stock" };
+  if (!item || item.stock <= 0) {
+    pushLog(`Transaction blocked: Conflict detected. Resource exhausted.`, "error");
+    return { success: false, reason: "Out of Stock" };
+  }
   
   item.stock -= 1;
-  // Buying instantly spikes asset demand score
-  item.demandScore = Math.min(100, item.demandScore + 25);
-  item.currentPrice = Math.round(item.currentPrice * 1.04);
+  item.demandScore = Math.min(100, item.demandScore + 20);
+  item.currentPrice = Math.round(item.currentPrice * 1.035);
   item.history.push(item.currentPrice);
   
+  pushLog(`Order fulfilled: 1 unit of ${item.name} claimed.`, "success");
+  
+  if (item.stock === 0) {
+    pushLog(`CRITICAL: Stock depletion event on ${item.name}!`, "critical");
+    io.emit("SYSTEM_ALERT", { message: `CRITICAL ALERT: ${item.name} has officially sold out!`, type: "critical" });
+  }
+
   return { success: true, updatedItem: item };
+}
+
+export function injectRestock(io) {
+  marketInventory.forEach(item => {
+    if (item.stock < 5) {
+      const injectionCount = Math.floor(Math.random() * 8) + 5;
+      item.stock += injectionCount;
+      pushLog(`Admin Refill event: Injected +${injectionCount} units into ${item.name}.`, "system");
+    }
+  });
+  io.emit("MARKET_DATA_STREAM", { inventory: marketInventory, logs: systemLogs });
 }

@@ -2,7 +2,7 @@ import express from 'express';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
 import cors from 'cors';
-import { marketInventory, runMarketSimulation, processPurchase } from './simulation/marketEngine.js';
+import { marketInventory, systemLogs, runMarketSimulation, processPurchase, injectRestock } from './simulation/marketEngine.js';
 
 const app = express();
 app.use(cors({ origin: "http://localhost:3000" }));
@@ -13,30 +13,23 @@ const io = new Server(httpServer, {
   cors: { origin: "http://localhost:3000", methods: ["GET", "POST"] }
 });
 
-// Standard REST endpoint for baseline initial state hydration
-app.get('/api/inventory', (req, res) => {
-  res.json(marketInventory);
-});
-
-// WebSocket orchestration layer
 io.on("connection", (socket) => {
-  console.log(`Connection established: Client IDs [ ${socket.id} ]`);
+  console.log(`Node linked: ${socket.id}`);
   
-  // Send current state instantly to newly connected client
-  socket.emit("MARKET_UPDATE", marketInventory);
+  // Instant baseline sync
+  socket.emit("MARKET_DATA_STREAM", { inventory: marketInventory, logs: systemLogs });
 
-  // Handle instant purchase triggers over websocket connection
   socket.on("EXECUTE_PURCHASE", (itemId) => {
-    const result = processPurchase(itemId);
-    if (result.success) {
-      // Broadcast state update immediately to all connected screens
-      io.emit("MARKET_UPDATE", marketInventory);
-    } else {
-      socket.emit("TRANSACTION_FAILED", { itemId, reason: result.reason });
-    }
+    processPurchase(itemId, io);
+    io.emit("MARKET_DATA_STREAM", { inventory: marketInventory, logs: systemLogs });
   });
 
-  socket.on("disconnect", () => console.log(`Connection closed: ${socket.id}`));
+  // Listener for automated backend restock execution
+  socket.on("TRIGGER_GLOBAL_RESTOCK", () => {
+    injectRestock(io);
+  });
+
+  socket.on("disconnect", () => console.log(`Node unlinked: ${socket.id}`));
 });
 
 const PORT = 4000;
